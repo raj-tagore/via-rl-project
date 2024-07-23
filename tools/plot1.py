@@ -16,7 +16,6 @@ def init():
 
 # Update function for each frame
 def update(frame):
-    print(frame)
     xdata.append(frame)
     ydata.append(random.uniform(0, 10))  # Simulate real-time data
     if len(xdata) > 10:
