@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import random
+import threading
 
 # Create a figure and axes for the plots
 fig, (ax1, ax2) = plt.subplots(2, 1)
@@ -45,5 +46,7 @@ ani1 = animation.FuncAnimation(fig, animate_line, interval=500)
 ani2 = animation.FuncAnimation(fig, animate_scatter, interval=500)
 
 # Display the plot
+
 plt.tight_layout()
 plt.show()
+

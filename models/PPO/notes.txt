@@ -1,0 +1,52 @@
+Model6 is the first working model, works with only one weight value and is not very stable
+
+---Env Randomization---
+Model7 converges to lesser loss values, but the agent doesnt learn anything
+Model8 is same as model6, but trained more to see if it converges to a better solution (also
+    bigger n_steps and batch_size) (its shit)
+Model9 is trained for the same time, batch_size=64 and n_steps=1024 as Model6 but this time
+    acceleration of body and EE stats are passed as observations
+Model10 is the same as model9 but batch_size=256 and n_steps=8192 (also shit)
+Model11, here we have increased the no of steps per episode from 1000 to 100_000.
+
+---Env Randomization off---
+Model12,13 are mistakes - env rewards were fucked up
+Model14 is the same as model 11, but the training was interrupted on step 140k
+Model15 - the negative reward for glitches has jacked up. Model is still shit.
+
+---Gravity mod turned off---
+Gravity was probably causing the markov assumption to not hold, so removed it.
+Wrapped the env and normalized the observations
+Started using tensorboard to monitor the progress of my RL algorithm
+Model16 is the result of a few steps of training on this. Loss values were humorously low.
+Model17 is another similar failure
+Model18 and Model19 are also failures
+Tuned some hyperparams for Model20 - here are the params:
+    params = {
+    'learning_rate': 3e-4,      # Learning rate for the optimizer
+    'n_steps': 2048,            # Number of steps to run for each environment per update
+    'batch_size': 64,           # Mini-batch size for each gradient update
+    'n_epochs': 3,              # Number of optimization epochs to perform
+    'gamma': 0.99,              # Discount factor for future rewards
+    'gae_lambda': 0.95,         # GAE lambda parameter
+    'ent_coef': 0.2,            # Coefficient for entropy bonus
+    'vf_coef': 0.5,             # Coefficient for the value function loss
+    'verbose': 1,               # Verbosity level for logging
+    'tensorboard_log': 'ppo_logs/', # Directory to save logs
+} - Failed
+Decreased the episode size to 2048 - for Model21
+After making the stupidest mistake in the history of RL, the reward function has finally
+been fixed. Model22 is the first model to be trained on the fixed reward function.
+Fixed anti-cheat and reward function again. Removed the contact constraint - Model23
+---- Incremental control ----
+Mode27 - First model to be trained with incremental control.
+Model28 is very promising, with rewards of 4000+ - this however did not learn all the essentials
+episodes were too long.
+Model29 was trained for 5M steps, with shorter episodes
+but the ent_coef was too high so the progress was unstable
+Logs for model29 were in PPO15, Env randomization was on here.
+Model30 fixed all above that was wrong in model29. Model30 was trained for 5M steps. Model30 
+could have literaly byhearted the env but it failed to do even that.
+
+Model31 is trained by a MlpLstmPolicy, which I hope will understand the relationships between
+multiple states better.

@@ -3,21 +3,20 @@ import pymunk.pygame_util
 import pygame
 import sys
 import numpy as np  
-import pymunk.matplotlib_util
+import gymnasium as gym
+from gymnasium import spaces
 import pygame_gui
-import matplotlib.pyplot as plt
-from matplotlib.animation import FuncAnimation
-import threading
+from stable_baselines3 import PPO
+import csv
 
 # Extension of World 2 where I am having 2 springs on a groove joint
 # Here I try to integrate a GUI with sliders to modify parameters of the environment in real time
 # In this world, I am trying to use pygame_gui for the GUI
-
-pygame.init()
+# I am also trying to implement a mathematical controller for the robot
 
 class Robot:
-    def __init__(self, mass=1, radius=25, length_init=100, length_limits=(25,200), 
-                 impedance_init=100, impedance_limits=(0,1000), pos_init=(150, 100)):
+    def __init__(self, mass=1, radius=25, length_init=100, length_limits=(50,300), 
+                 impedance_init=100, impedance_limits=(50,400), pos_init=(150, 100)):
         # These can be accessed anytime because they dont change
         self.mass = mass
         self.radius = radius
@@ -29,6 +28,8 @@ class Robot:
         self.body = pymunk.Body(self.mass, inertia_init)
         self.body.position = pos_init 
         self.body_shape = pymunk.Circle(self.body, self.radius)
+        self.body_previous_velocity = 0
+        self.body_acceleration = 0
         # Robot's EE's Pymunk Body
         # EE's initial mass is 0.5 of the robot's mass
         self.EE = pymunk.Body(self.mass*0.5, pymunk.moment_for_circle(1, 0, 15))
@@ -36,6 +37,8 @@ class Robot:
         self.EE_shape = pymunk.Circle(self.EE, 15)
         # Whether the EE is in contact with the environment
         self.EE_contact = 0
+        self.EE_previous_velocity = 0
+        self.EE_acceleration = 0
         # Robot's Actuator Spring's Pymunk Spring
         # length and impedance can be accessed and modified by this spring instance
         self.actuator = pymunk.DampedSpring(self.body, self.EE, (0, 0), (0, 0), length_init, impedance_init, 0)
@@ -52,14 +55,26 @@ class Robot:
         self.EE.position = (self.body.position[0], self.body.position[1] + length_init)
         self.actuator.rest_length = length_init
         self.actuator.stiffness = impedance_init
+        self.body_previous_velocity = 0
+        self.EE_previous_velocity = 0
+        self.body_acceleration = 0
+        self.EE_acceleration = 0
+        
+    def accelerations(self):
+        body_velocity_change = self.body.velocity.y - self.body_previous_velocity
+        self.body_acceleration = body_velocity_change
+        EE_velocity_change = self.EE.velocity.y - self.EE_previous_velocity
+        self.EE_acceleration = EE_velocity_change
+        self.body_previous_velocity = self.body.velocity.y
+        self.EE_previous_velocity = self.EE.velocity.y
         
         
              
-class Environment:
+class Environment():
     
     env_size = (1000, 300)
     
-    def __init__(self, rest_length=100, impedance=100, damping=0, gravity=900):
+    def __init__(self, rest_length=300, impedance=100, damping=0, gravity=900):
         # These values dont change across a single episode
         self.anchor = pymunk.Body(body_type=pymunk.Body.STATIC)
         self.anchor_shape = pymunk.Circle(self.anchor, 5)
@@ -68,6 +83,8 @@ class Environment:
         self.surface = pymunk.Body(1, pymunk.moment_for_circle(1, 0, 15))
         self.surface_shape = pymunk.Circle(self.surface, 15)
         self.surface.position = (150, self.anchor.position[1] - rest_length)
+        self.surface_previous_velocity = 0
+        self.surface_acceleration = 0
         # Spring connecting the anchor and the surface
         self.spring = pymunk.DampedSpring(self.anchor, self.surface, (0, 0), (0, 0), rest_length, impedance, damping)
         self.gravity = gravity
@@ -79,15 +96,23 @@ class Environment:
         self.spring.stiffness = impedance
         self.spring.damping = damping
         self.gravity = gravity
+        self.surface_previous_velocity = 0
+        self.surface_acceleration = 0
+        
+    def accelerations(self):
+        surface_velocity_change = self.surface.velocity.y - self.surface_previous_velocity
+        self.surface_acceleration = surface_velocity_change
+        self.surface_previous_velocity = self.surface.velocity.y
+        
                 
-        
-        
-class World:
+
+class World(gym.Env):
     
     space = pymunk.Space()
     rate = 60
     
     def __init__(self, robot, env, mode='normal'):
+        super(World, self).__init__()
         self.robot = robot
         self.env = env
         self.space.gravity = (0, self.env.gravity)
@@ -107,20 +132,28 @@ class World:
         self.stable_steps = 0
         self.terminated = False
         self.truncated = False
-        self.steps_per_episode = 50000
+        self.steps_per_episode = 100_000
+        self.action_space = spaces.Box(low=-1, high=1, shape=(2,))
+        # self.observation_space = spaces.Dict({
+        #     'robot_position': spaces.Box(low=0, high=1000, shape=(1,)),
+        #     'robot_velocity': spaces.Box(low=-1000, high=1000, shape=(1,)),
+        #     'actuator_length': spaces.Box(low=self.robot.length_limits[0], high=self.robot.length_limits[1], shape=(1,)),
+        #     'actuator_impedance': spaces.Box(low=self.robot.impedance_limits[0], high=self.robot.impedance_limits[1], shape=(1,)),
+        #     'EE_contact': spaces.MultiBinary((1,))
+        # })
+        self.observation_space = spaces.Box(low=-1000, high=1000, shape=(9,))
         if mode == 'RL':
             pass
         elif mode == 'observe':
+            pygame.init()
             self.screen_dim = (300, 1000)
             self.screen = pygame.display.set_mode(self.screen_dim)
             self.draw_options = pymunk.pygame_util.DrawOptions(self.screen)
             self.clock = pygame.time.Clock()
-            self.fig, self.axes = plt.subplots(4,1)
-            self.init_plots()
-            # thread = threading.Thread(target=self.show_plots)
-            # thread.start()  
-            # thread.join()
+            self.file = open("current_run.csv", 'w', newline='')
+            self.writer = csv.writer(self.file)
         elif mode == 'control':
+            pygame.init()
             self.screen_dim = (1000, 1000)
             self.screen = pygame.display.set_mode(self.screen_dim)
             self.draw_options = pymunk.pygame_util.DrawOptions(self.screen)
@@ -128,33 +161,76 @@ class World:
             self.manager = pygame_gui.UIManager(self.screen_dim)
             self.add_gui_elements()
             self.paused = False
+            self.font = pygame.font.Font(None, 20)
+            self.file = open("current_run.csv", 'w', newline='')
+            self.writer = csv.writer(self.file)
         
     def step(self, action):
         self.robot.do_action(action)
         self.space.step(1/self.rate)
+        self.robot.accelerations()
+        self.env.accelerations()
         self.steps += 1
-        observation = self.get_observation1()
-        reward = self.get_reward1()
-        # The episode terminates if the robot EE goes below surface
-        if self.env.surface.position.y - self.robot.EE.position.y < 0:
-            self.terminate = True
+        observation = self.get_observation2()
         self.truncated = False if self.steps < self.steps_per_episode else True
+        self.anti_cheat()
+        reward = self.get_reward2()
         return observation, reward, self.terminated, self.truncated, {}
+    
+    def store_state(self):
+        state = [self.steps,
+                 self.robot.body.position.y,
+                 self.robot.body.velocity.y,
+                 self.robot.body_acceleration,
+                 self.robot.EE.position.y,
+                 self.robot.EE.velocity.y,
+                 self.robot.EE_acceleration,
+                 self.robot.EE_contact,
+                 self.robot.actuator.rest_length,
+                 self.robot.actuator.stiffness,
+                 self.env.surface.position.y,
+                 self.env.surface.velocity.y,
+                 self.env.surface_acceleration]
+        self.writer.writerow(state)
         
     def render(self):
         if self.mode == 'observe':
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.close()
-            self.screen.fill((0, 0, 0))
+            self.screen.fill((255, 255, 255))
             self.space.debug_draw(self.draw_options)
             pygame.display.flip()
             self.clock.tick(self.rate)
+            self.store_state()
         elif self.mode == "control":
             self.manager.update(self.clock.tick(self.rate)/1000.0)
-            self.screen.fill((0, 0, 0))
+            self.screen.fill((255, 255, 255))
             self.manager.draw_ui(self.screen)
             self.space.debug_draw(self.draw_options)
+            
+            text = f"Body Position: {self.robot.body.position.y}"
+            text_surface = self.font.render(text, True, (0, 0, 0))
+            self.screen.blit(text_surface, (400, 780))
+            text = f"Body Velocity: {self.robot.body.velocity.y}"
+            text_surface = self.font.render(text, True, (0, 0, 0))
+            self.screen.blit(text_surface, (400, 800))
+            text = f"Body Acceleration: {self.robot.body_acceleration}"
+            text_surface = self.font.render(text, True, (0, 0, 0))
+            self.screen.blit(text_surface, (400, 820))
+            text = f"Actuator rest length: {self.robot.actuator.rest_length}"
+            text_surface = self.font.render(text, True, (0, 0, 0))
+            self.screen.blit(text_surface, (400, 840))
+            text = f"Actuator Stiffness: {self.robot.actuator.stiffness}"   
+            text_surface = self.font.render(text, True, (0, 0, 0))
+            self.screen.blit(text_surface, (400, 860))
+            text = f"Step: {self.steps}"   
+            text_surface = self.font.render(text, True, (0, 0, 0))
+            self.screen.blit(text_surface, (400, 880))
+            text = "Rule Break: "+ str(self.truncated)  
+            text_surface = self.font.render(text, True, (0, 0, 0))
+            self.screen.blit(text_surface, (400, 900))
+            
             pygame.display.flip()
             self.clock.tick(self.rate)
         
@@ -170,8 +246,28 @@ class World:
             self.stable_steps = 0
         else:
             reward = 0
+        if self.terminated:
+            reward = -10000
         return reward
     
+    def get_reward2(self):
+        # this reward function guides the robot slightly better
+        # it rewards the robot more, if the robot maintains lesser velocity
+        # it doesnt hand out rewards if the robot isnt in contact
+        k = self.robot.EE_contact
+        reward = k*np.exp(-((self.robot.body.velocity.y / 25) ** 2))
+        if self.terminated:
+            reward = -10000
+        return reward
+    
+    def get_reward3(self):
+        # this rewards robot for lesser accelerations
+        reward = np.exp(-((self.robot.body_acceleration) ** 2))
+        if self.terminated:
+            reward = -10000
+        return reward
+        
+        
     def get_observation1(self):
         # In this Observation Function Robot observes: 
         # position, velocity of the body
@@ -181,58 +277,92 @@ class World:
             self.robot.EE_contact = 1
         else:
             self.robot.EE_contact = 0
-            
-        observation = np.array([self.robot.body.position.y, 
-                                self.robot.body.velocity.y, 
-                                self.robot.actuator.rest_length, 
-                                self.robot.actuator.stiffness, 
-                                self.robot.EE_contact])
+        
+        observation = np.array([
+            self.robot.body.position.y,
+            self.robot.body.velocity.y,
+            self.robot.actuator.rest_length,
+            self.robot.actuator.stiffness,
+            self.robot.EE_contact
+        ], dtype=np.float32)
         return observation
+    
+    def get_observation1_dict(self):
+        if self.env.surface.position.y - self.robot.EE.position.y < 5:
+            self.robot.EE_contact = 1
+        else:
+            self.robot.EE_contact = 0
+            
+        observation = {
+            'robot_position': np.array([self.robot.body.position.y],dtype=np.float32),
+            'robot_velocity': np.array([self.robot.body.velocity.y],dtype=np.float32),
+            'actuator_length': np.array([self.robot.actuator.rest_length],dtype=np.float32),
+            'actuator_impedance': np.array([self.robot.actuator.stiffness],dtype=np.float32),
+            'EE_contact': np.array([self.robot.EE_contact],dtype=np.int8)
+        }
+        return observation
+    
+    def get_observation2(self):
+        # In this Observation Function Robot observes:
+        # accelerations of body
+        # position, velocity, acceleration of EE
+        # alongside all the observations from get_observation1
+        
+        if self.env.surface.position.y - self.robot.EE.position.y < 5:
+            self.robot.EE_contact = 1
+        else:
+            self.robot.EE_contact = 0
+            
+        observation = np.array([
+            self.robot.body.position.y,
+            self.robot.body.velocity.y,
+            self.robot.body_acceleration,
+            self.robot.actuator.rest_length,
+            self.robot.actuator.stiffness,
+            self.robot.EE.position.y,
+            self.robot.EE.velocity.y,
+            self.robot.EE_acceleration,
+            self.robot.EE_contact
+        ], dtype=np.float32)
+        
+        return observation
+            
+    def anti_cheat(self):
+        # This function checks if the robot breaks the rules
+        # and if it does, it punishes the robot
+        if self.robot.body.position.y > self.robot.EE.position.y:
+            self.terminated = True
+        if self.robot.EE.position.y > self.env.surface.position.y:
+            self.terminated = True
     
     def reset(self, seed=42):
         np.random.seed(seed)
+        
+        # Limits to randomize between
+        # robot_pos_y_limits = (25, 500)
+        # env_rest_length_limits = (100, 300)
+        # env_stiffness_limits = (20, 800)
+        # env_damping_limits = (0, 10)
+        # env_gravity_limits = (100, 2000)
+        # robot_start_pos = (150, np.random.uniform(robot_pos_y_limits[0], robot_pos_y_limits[1]))
+        # env_rest_length = np.random.uniform(env_rest_length_limits[0], env_rest_length_limits[1])
+        # env_stiffness = np.random.uniform(env_stiffness_limits[0], env_stiffness_limits[1])
+        # env_damping = np.random.uniform(env_damping_limits[0], env_damping_limits[1])
+        # env_gravity = np.random.uniform(env_gravity_limits[0], env_gravity_limits[1])
+        # self.robot.reset(pos_init=robot_start_pos)
+        # self.env.reset(rest_length=env_rest_length, impedance=env_stiffness, damping=0, gravity=env_gravity)
+        
         self.robot.reset()
         self.env.reset()
+        
         self.steps = 0
         self.terminated = False
         self.truncated = False
-        return self.get_observation1(), {}
+        return self.get_observation2(), {}
     
     def close(self):
         pygame.quit()
-        sys.exit()
-    
-    # Code for plotting and stuff here
-    def init_plots(self):
-        self.xdata = []
-        self.robot_pos_ydata = []
-        self.robot_vel_ydata = []
-        self.robot_length_ydata = []
-        self.robot_impedance_ydata = []
-        
-    def update_plots(self, _):
-        self.xdata.append(self.steps)
-        self.robot_pos_ydata.append(self.robot.body.position[1])
-        self.robot_vel_ydata.append(self.robot.body.velocity[1])
-        self.robot_length_ydata.append(self.robot.actuator.rest_length)
-        self.robot_impedance_ydata.append(self.robot.actuator.stiffness)
-        if len(self.xdata) > 100:
-            self.xdata.pop(0)
-            self.robot_pos_ydata.pop(0)
-            self.robot_vel_ydata.pop(0)
-            self.robot_length_ydata.pop(0)
-            self.robot_impedance_ydata.pop(0)
-        for ax in self.axes:
-            ax.set_xlim(max(0, self.steps-100), self.steps)
-        self.axes[0].plot(self.xdata, self.robot_pos_ydata)
-        self.axes[1].plot(self.xdata, self.robot_vel_ydata)
-        self.axes[2].plot(self.xdata, self.robot_length_ydata)
-        self.axes[3].plot(self.xdata, self.robot_impedance_ydata)
-        
-    def show_plots(self):
-        anim = FuncAnimation(self.fig, self.update_plots, frames=self.steps, blit=False)
-        plt.tight_layout()
-        plt.show()
+        sys.exit()        
         
     # Code for UI and stuff here
     def add_gui_elements(self):
@@ -281,6 +411,9 @@ class World:
         self.pause_button = pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((400, 700), (100, 50)),
             text='Pause', manager=self.manager)
+        self.reset_button = pygame_gui.elements.UIButton(
+            relative_rect=pygame.Rect((600, 700), (100, 50)),
+            text='Reset', manager=self.manager)
     
     def control(self):
         for event in pygame.event.get():
@@ -311,29 +444,70 @@ class World:
             if event.type == pygame_gui.UI_BUTTON_PRESSED:
                 if event.ui_element == self.pause_button:
                     self.paused = not self.paused
+                elif event.ui_element == self.reset_button:
+                    seed = np.random.randint(0, 1000)
+                    self.reset(seed=seed)
             self.manager.process_events(event)
         if self.paused == False:
             self.space.step(1/self.rate)
+            self.robot.accelerations()
+            self.env.accelerations()
             self.steps += 1
-        observation = self.get_observation1()
-        reward = self.get_reward1()
-        # The episode terminates if the robot EE goes below surface
-        if self.env.surface.position.y - self.robot.EE.position.y < 0:
-            self.terminate = True
-        self.truncated = False if self.steps < self.steps_per_episode else True
-        return observation, reward, self.terminated, self.truncated, {}
-        
+            self.anti_cheat()   
+            self.store_state()
+     
+    def mathematical_controller(self):
+        m = self.robot.mass
+        g = self.env.gravity
+        x = self.robot.actuator.rest_length-(self.robot.EE.position.y-self.robot.body.position.y)
+        v = self.robot.body.velocity.y
+        k = self.robot.actuator.stiffness
+        alpha = 0.03
+        beta = 0.2
+        v_ee = self.robot.EE.velocity.y
+        a_ee = self.robot.EE_acceleration
+        if v_ee*a_ee>0 and abs(x)>10:
+            new_k = m*g/x
+            if new_k<self.robot.impedance_limits[0]:
+                new_k = self.robot.impedance_limits[0]
+            elif new_k>self.robot.impedance_limits[1]:
+                new_k = self.robot.impedance_limits[1]
+            self.robot.actuator.stiffness = new_k
+        elif v_ee*a_ee<0 and abs(k)>10:
+            new_x = m*g/k
+            new_rest_length = new_x + self.robot.EE.position.y - self.robot.body.position.y
+            if new_rest_length<self.robot.length_limits[0]:
+                new_rest_length = self.robot.length_limits[0]
+            elif new_rest_length>self.robot.length_limits[1]:
+                new_rest_length = self.robot.length_limits[1]
+            self.robot.actuator.rest_length = new_rest_length
+            
 
-        
         
 if __name__ == "__main__":
     robot = Robot()
     env = Environment()
-    world = World(robot, env, mode='observe')
-    while True:
-        world.step([0, 0])
-        # world.control()
-        world.render()
+    env.reset()
+    
+    MODE = 'observe'
+    
+    if MODE == 'observe':
+        world = World(robot, env, mode='observe')
+        model = PPO.load("models/model14")
+        while True:
+            action, _ = model.predict(world.get_observation2())
+            world.step(action)
+            if world.truncated or world.terminated:
+                world.reset() 
+                print("Reset")
+            world.render()
+                
+    elif MODE == 'control':        
+        world = World(robot, env, mode='control')
+        while True:
+            world.control()
+            world.mathematical_controller()
+            world.render()
     
         
     
