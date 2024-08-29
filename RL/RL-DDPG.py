@@ -30,14 +30,14 @@ action_noise = NormalActionNoise(mean=th.zeros(n_actions), sigma=0.1 * th.ones(n
 model = DDPG(
     policy="MlpPolicy",
     env=world,
-    learning_rate=1e-3,
-    buffer_size=1000000,
-    learning_starts=10000,
-    batch_size=64,
-    tau=0.005,
-    gamma=0.99,
-    action_noise=action_noise,
-    policy_kwargs=dict(activation_fn=th.nn.ReLU),
+    # learning_rate=1e-3,
+    # buffer_size=10000,
+    # learning_starts=50000,
+    # batch_size=64,
+    # tau=0.005,
+    # gamma=0.9,
+    # action_noise=action_noise,
+    # policy_kwargs=dict(activation_fn=th.nn.ReLU),
     verbose=1,
     tensorboard_log="logs/"
 )

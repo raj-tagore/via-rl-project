@@ -9,7 +9,7 @@ class Robot:
         
         # constants
         self.MASS = m = 1
-        self.RADIUS = r = 15
+        self.RADIUS = r = 25
         self.EE_MASS = ee_m = self.MASS*0.7
         self.EE_RADIUS = ee_r = 15
         self.LENGTH_LIMITS = (50,300)
@@ -37,8 +37,8 @@ class Robot:
         self.upper_arm.angle = np.pi*(36.87)/180
         
         lower_arm_dim = (adm*4 - r - ee_r - 10, 10)
-        upper_arm_inertia = pymunk.moment_for_box(ee_m*4/5, upper_arm_dim)
-        self.lower_arm = pymunk.Body(ee_m*4/5, upper_arm_inertia)
+        lower_arm_inertia = pymunk.moment_for_box(ee_m*4/5, upper_arm_dim)
+        self.lower_arm = pymunk.Body(ee_m*4/5, lower_arm_inertia)
         self.lower_arm_shape = pymunk.Poly.create_box(self.lower_arm, lower_arm_dim)
         self.lower_arm_shape.color = (0, 255, 255, 150)
         self.lower_arm.position = ((p2[0]+p3[0])/2, (p2[1]+p3[1])/2)
@@ -49,7 +49,7 @@ class Robot:
         self.EE.position = p3
         
         # self.motor = pymunk.SimpleMotor(self.upper_arm, self.lower_arm, 0)
-        self.actuator = pymunk.DampedRotarySpring(self.upper_arm, self.lower_arm, -np.pi/2, 1e6, 0)
+        self.actuator = pymunk.DampedRotarySpring(self.upper_arm, self.lower_arm, -np.pi/2, 3e5, 0)
         self.shoulder_pin = pymunk.PivotJoint(self.body, self.upper_arm, p1)
         self.elbow_pin = pymunk.PivotJoint(self.upper_arm, self.lower_arm, p2)
         self.wrist_pin = pymunk.PivotJoint(self.lower_arm, self.EE, p3)
@@ -96,6 +96,8 @@ if __name__ == '__main__':
         
         space.step(1/60)
         space.debug_draw(pymunk.pygame_util.DrawOptions(screen))
+        
+        print(robot.upper_arm_shape.get_vertices())
         
         pygame.display.flip()
         clock.tick(60)

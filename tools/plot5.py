@@ -72,7 +72,7 @@ def update_plot(frame):
         line.set_ydata(state[i])
     
     # reset x-axis limits
-    if step[-1] > last_axis_redraw+100:    
+    if step[-1] > last_axis_redraw+100 or state==[]:    
         for i, ax in enumerate(np.nditer(axes, flags=['refs_ok'])):
             ax = ax.item()
             ax.set_xlim(min(step)-50, max(step)+50)

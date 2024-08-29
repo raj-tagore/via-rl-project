@@ -3,12 +3,12 @@ import numpy as np
 
 
 class Robot:
-    def __init__(self, pos_init=(150, 100), length_init=150, stiffness_init=100):
+    def __init__(self, mass=2, pos_init=(150, 100), length_init=150, stiffness_init=100):
         
         # constants
-        self.MASS = 1
+        self.MASS = mass
         self.RADIUS = 25
-        self.EE_MASS = 0.2
+        self.EE_MASS = 0.2*self.MASS
         self.EE_RADIUS = 15
         self.LENGTH_LIMITS = (100,300)
         self.STIFFNESS_LIMITS = (50,400)
@@ -40,16 +40,17 @@ class Robot:
         action = np.array(action)
 
         # constants
+        alpha = 30
         l_max = self.LENGTH_LIMITS[1]
         l_min = self.LENGTH_LIMITS[0]
-        l_increment_multiplier = l_max-l_min
+        l_increment_multiplier = (l_max-l_min)/alpha
         k_max = self.STIFFNESS_LIMITS[1]
         k_min = self.STIFFNESS_LIMITS[0]
-        k_increment_multiplier = k_max-k_min
+        k_increment_multiplier = (k_max-k_min)/alpha
         
         # add noise to the action   
         if noise:
-            action += np.random.normal(0, 0.1, action.shape)
+            action += np.random.normal(0, noise, action.shape)
         
         if l_control == 'direct':
             rest_length = action[0]*(l_max - l_min)/2 + (l_max + l_min)/2
@@ -67,12 +68,14 @@ class Robot:
         self.actuator.stiffness = stiffness
         
         
-    def reset(self, pos_init=(150, 100), length_init=100, impedance_init=100):
+    def reset(self, mass=2, pos_init=(150, 100), length_init=150, impedance_init=100):
         
+        self.body.mass = mass
         self.body.position = pos_init
         self.body_previous_velocity = 0
         self.body_acceleration = 0
         
+        self.EE.mass = 0.2*mass
         self.EE.position = (self.body.position[0], self.body.position[1] + length_init)
         self.EE_previous_velocity = 0
         self.EE_acceleration = 0

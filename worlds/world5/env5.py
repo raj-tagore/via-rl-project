@@ -26,17 +26,16 @@ class Environment():
         self.spring = pymunk.DampedSpring(self.anchor, self.surface, (0, 0), (0, 0), rest_length, stiffness, damping)
         self.gravity = gravity
         
-    def reset(self, rest_length=300, stiffness=100, damping=0, gravity=900):
+    def reset(self, mass=1, rest_length=300, stiffness_multiplier=100, gravity=900):
         
         self.anchor.position = (150, 900)
-        
+        self.surface.mass = mass
         self.surface.position = (150, self.anchor.position[1] - rest_length)
         self.surface_previous_velocity = 0
         self.surface_acceleration = 0
         
         self.spring.rest_length = rest_length
-        self.spring.stiffness = stiffness
-        self.spring.damping = damping
+        self.spring.stiffness = stiffness_multiplier*mass
         
         self.gravity = gravity
         

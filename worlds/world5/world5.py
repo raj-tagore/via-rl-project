@@ -1,15 +1,19 @@
+import sys
+import os
+sys.path.append('worlds/world5')
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 import pymunk
 import pymunk.pygame_util
 import pygame
-import sys
 import numpy as np  
 import gymnasium as gym
 from gymnasium import spaces
 import pygame_gui
-from stable_baselines3 import PPO, DDPG
+from stable_baselines3 import PPO, DDPG, A2C, SAC
 import csv
 from robot5 import Robot
 from env5 import Environment
+import matplotlib.pyplot as plt
 
 # Cleaner version of world4. 
 # Here I implement stuff like adding noise to observations and implementing a more realistic
@@ -47,12 +51,19 @@ class World(gym.Env):
         self.stable_steps = 0
         self.terminated = False
         self.truncated = False
-        self.steps_per_episode = 512
+        self.steps_per_episode = 2048
         self.action_space = spaces.Box(low=-1, high=1, shape=(2,))
         
-        obs_lows = np.array([0, -5000, -5000, 0, 0, 0, -5000, -5000, 0], dtype=np.float32) 
-        obs_highs = np.array([1000, 5000, 5000, 500, 1000, 1000, 5000, 5000, 1], dtype=np.float32)
-        self.observation_space = spaces.Box(low=obs_lows, high=obs_highs, shape=(9,))
+        # obs_lows = np.array([0, -5000, -5000, 0, 0, 0, -5000, -5000, 0], dtype=np.float32) 
+        # obs_highs = np.array([1000, 5000, 5000, 500, 1000, 1000, 5000, 5000, 1], dtype=np.float32)
+        # self.observation_space = spaces.Box(low=obs_lows, high=obs_highs, shape=(9,))
+        
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(7,))
+        self.total_reward = 0
+        self.avg_reward = 0
+        
+        self.K_CONTROL = 'incremental'
+        self.L_CONTROL = 'incremental'
         
         if mode == 'RL':
             pass
@@ -71,7 +82,7 @@ class World(gym.Env):
             self.add_gui_elements()
     
     def step(self, action):
-        self.robot.do_action(action, noise=False, l_control='direct', k_control='direct')
+        self.robot.do_action(action, noise=False, l_control=self.L_CONTROL, k_control=self.K_CONTROL)
         self.space.step(1/self.FPS)
         self.steps += 1
         observation = self.get_observation()
@@ -81,10 +92,9 @@ class World(gym.Env):
         return observation, reward, self.terminated, self.truncated, {}
     
     def update(self, action=None):
-        if action is not None:
-            self.robot.do_action(action, noise=False, l_control='incremental', k_control='incremental')
-        self.gui_control()
-        if not self.paused:
+        if self.mode == 'RL':
+            if action is not None:
+                self.robot.do_action(action, noise=False, l_control=self.L_CONTROL, k_control=self.K_CONTROL)
             self.space.step(1/self.FPS)
             self.steps += 1
             observation = self.get_observation()
@@ -92,9 +102,21 @@ class World(gym.Env):
             self.anti_cheat()
             reward = self.reward = self.get_reward()
             return observation, reward, self.terminated, self.truncated, {}
+        else:
+            if action is not None:
+                self.robot.do_action(action, noise=False, l_control=self.L_CONTROL, k_control=self.K_CONTROL)
+            self.gui_control()
+            if not self.paused:
+                self.space.step(1/self.FPS)
+                self.steps += 1
+                observation = self.get_observation()
+                self.truncated = self.steps >= self.steps_per_episode
+                self.anti_cheat()
+                reward = self.reward = self.get_reward()
+                return observation, reward, self.terminated, self.truncated, {}
             
     def get_observation(self):
-        OBSERVATION_FUNCTION = 2
+        OBSERVATION_FUNCTION = 4
         self.robot.update_accelerations()
         self.env.update_accelerations()
         if self.env.surface.position.y - self.robot.EE.position.y < 30:
@@ -116,7 +138,7 @@ class World(gym.Env):
                     self.robot.body.position.y,
                     self.robot.body.velocity.y,
                     self.robot.body_acceleration,
-                    self.robot.actuator.rest_length,
+                    self.robot.EE.position.y-self.robot.body.position.y,
                     self.robot.actuator.stiffness,
                     self.robot.EE.position.y,
                     self.robot.EE.velocity.y,
@@ -136,6 +158,16 @@ class World(gym.Env):
                     self.robot.EE_acceleration + np.random.normal(0, 0.1*self.obs_highs[7]),
                     self.robot.EE_contact
                 ], dtype=np.float32)
+            case 4:
+                observation = np.array([
+                    self.robot.body_acceleration,
+                    self.robot.EE.position.y-self.robot.body.position.y,
+                    self.robot.EE.velocity.y-self.robot.body.velocity.y,
+                    self.robot.actuator.rest_length,
+                    self.robot.actuator.stiffness,
+                    self.robot.EE_acceleration,
+                    self.robot.EE_contact,
+                ], dtype=np.float32)
         return observation
     
     def anti_cheat(self):
@@ -149,50 +181,63 @@ class World(gym.Env):
         if self.env.surface.position.y > self.env.anchor.position.y:
             self.out_of_bounds = True
             self.terminated = True
-        if self.robot.EE.position.y > 900:
-            self.out_of_bounds = True
-            self.terminated = True
-        if self.robot.EE.position.y - self.robot.body.position.y < 50:
-            self.out_of_bounds = True
             
     def get_reward(self):
-        REWARD_FUNCTION = 2
+        REWARD_FUNCTION = 1
         match REWARD_FUNCTION:
             case 1:
-                if self.robot.body.velocity.y < 10:
+                if self.robot.body.velocity.y < 10 and self.robot.EE_contact:
                     self.stable_steps += 1
                 else:
                     self.stable_steps = 0  
-                if self.stable_steps > 200:
+                if self.stable_steps > 20:
                     reward = 1
-                    self.stable_steps = 0
                 else:
                     reward = 0
             case 2:
                 reward = np.exp(-((self.robot.body.velocity.y / 25) ** 2))
             case 3:
                 reward = np.exp(-((self.robot.body_acceleration) ** 2))
+            case 4:
+                reward = 1 if self.robot.body.velocity.y < 10 else 0
+            case 5:
+                reward = np.exp(-((self.robot.body.velocity.y / 25) ** 2)) + np.exp(-((self.robot.EE.velocity.y / 25) ** 2))
+            case 6:
+                v = self.robot.body.velocity.y
+                reward = (np.exp(-(v/70)**2+5) - 60)/10
+            case 7:
+                reward = 1
         
         if self.out_of_bounds:
-            reward = -10
+            reward = -100
+            
+        self.total_reward += reward
+        self.avg_reward = self.total_reward/self.steps
         return reward
     
     def reset(self, seed=42):
         RANDOM_ON_RESET = True
         np.random.seed(seed)
-        robot_pos_y_limits = (25, 500)
+        
+        prev_ep_reward = self.total_reward
+        
+        robot_mass_limits = (1, 5)
+        robot_pos_y_limits = (100, 300)
+        
+        surface_mass_limits = (1, 2)
         env_rest_length_limits = (100, 300)
-        env_stiffness_limits = (20, 800)
-        env_damping_limits = (0, 10)
-        env_gravity_limits = (100, 2000)        
+        env_stiffness_multiplier_limits = (50, 150)
+        
         if RANDOM_ON_RESET:
+            robot_mass = np.random.uniform(robot_mass_limits[0], robot_mass_limits[1])
             robot_start_pos = (150, np.random.uniform(robot_pos_y_limits[0], robot_pos_y_limits[1]))
+            
+            surface_mass = np.random.uniform(surface_mass_limits[0], surface_mass_limits[1])
             env_rest_length = np.random.uniform(env_rest_length_limits[0], env_rest_length_limits[1])
-            env_stiffness = np.random.uniform(env_stiffness_limits[0], env_stiffness_limits[1])
-            env_damping = np.random.uniform(env_damping_limits[0], env_damping_limits[1])
-            env_gravity = 900
-            self.robot.reset(pos_init=robot_start_pos)
-            self.env.reset(rest_length=env_rest_length, stiffness=env_stiffness, damping=0, gravity=env_gravity)
+            env_stiffness_multiplier = np.random.uniform(env_stiffness_multiplier_limits[0], env_stiffness_multiplier_limits[1])
+            
+            self.robot.reset(mass=robot_mass, pos_init=robot_start_pos)
+            self.env.reset(mass=surface_mass, rest_length=env_rest_length, stiffness_multiplier=env_stiffness_multiplier)
         else:
             self.robot.reset()
             self.env.reset()
@@ -200,7 +245,8 @@ class World(gym.Env):
         self.steps = 0
         self.terminated = False
         self.truncated = False
-        return self.get_observation(), {}
+        self.total_reward = 0
+        return self.get_observation(), {'reward': prev_ep_reward}
     
     def close(self):
         self.file.close()
@@ -237,6 +283,15 @@ class World(gym.Env):
         text = "Reward: "+ str(self.reward)  
         text_surface = self.font.render(text, True, (0, 0, 0))
         self.screen.blit(text_surface, (400, 920))
+        text = "Robot mass: "+ str(self.robot.body.mass)  
+        text_surface = self.font.render(text, True, (0, 0, 0))
+        self.screen.blit(text_surface, (700, 780))
+        text = "Env Stiffness: "+ str(self.env.spring.stiffness)  
+        text_surface = self.font.render(text, True, (0, 0, 0))
+        self.screen.blit(text_surface, (700, 800))
+        text = "Avg Reward per Step: "+ str(self.avg_reward)  
+        text_surface = self.font.render(text, True, (0, 0, 0))
+        self.screen.blit(text_surface, (700, 820))
         
         self.clock.tick(self.FPS)
         pygame.display.flip()
@@ -372,14 +427,15 @@ class World(gym.Env):
     
     def mathematical_control(self):
         RETURN_ACTION = True
-        CONTROL = 'incremental'
+        L_CONTROL = self.L_CONTROL
+        K_CONTROL = self.K_CONTROL
         
-        m = self.robot.MASS
+        m = self.robot.body.mass
         g = self.env.gravity
         x = self.robot.actuator.rest_length-(self.robot.EE.position.y-self.robot.body.position.y)
         v = self.robot.body.velocity.y
         k = self.robot.actuator.stiffness
-        alpha = 0.03
+        alpha = 30
         beta = 0.2
         v_ee = self.robot.EE.velocity.y
         a_ee = self.robot.EE_acceleration
@@ -400,45 +456,118 @@ class World(gym.Env):
                 new_rest_length = np.clip(new_rest_length, l_min, l_max)
                 self.robot.actuator.rest_length = new_rest_length    
         else:
-            if CONTROL == 'direct':
-                if v_ee*a_ee>0 and abs(x)>10:
-                    new_k = m*g/x
-                    new_k = np.clip(new_k, k_min, k_max)
-                    normalized_k = (new_k - ((k_max+k_min)/2))/((k_max - k_min)/2)
-                    normalized_x = (self.robot.actuator.rest_length - ((l_max+l_min)/2))/((l_max - l_min)/2)
-                    action = np.array([normalized_x, normalized_k])
-                    return action
-                elif v_ee*a_ee<0 and abs(k)>10:
-                    new_x = m*g/k
-                    new_rest_length = new_x + self.robot.EE.position.y - self.robot.body.position.y
-                    new_rest_length = np.clip(new_rest_length, l_min, l_max)
-                    normalized_k = (k - ((k_max+k_min)/2))/((k_max - k_min)/2)
-                    normalized_x = (new_rest_length - ((l_max+l_min)/2))/((l_max - l_min)/2)
-                    action = np.array([normalized_x, normalized_k])
-                    return action
-            elif CONTROL == 'incremental':
-                if abs(x)>10 and abs(k)>10:
-                    req_k = m*g/x
-                    req_x = m*g/k
-                    k_diff_normalized = (req_k-k)/(k_max-k_min)  
-                    x_diff_normalized = (req_x-x)/(l_max-l_min)
-                    if v_ee*a_ee>0:
-                        action = np.array([0,k_diff_normalized])
-                    elif v_ee*a_ee<0:
-                        action = np.array([x_diff_normalized,0])
-                    return action
+            # Modify K
+            if v_ee*a_ee>0 and abs(x)>10:
+                new_k = m*g/x
+                new_k = np.clip(new_k, k_min, k_max)
+                if K_CONTROL == 'direct':
+                    normalized_k = (new_k - ((k_max+k_min)/2))/((k_max-k_min)/2)
+                elif K_CONTROL == 'incremental':
+                    normalized_k = alpha*(new_k - k)/(k_max-k_min)
+                if L_CONTROL == 'direct':
+                    normalized_x = (self.robot.actuator.rest_length - ((l_max+l_min)/2))/((l_max-l_min)/2)
+                elif L_CONTROL == 'incremental':
+                    normalized_x = 0
+                normalized_x = np.clip(normalized_x, -1, 1)
+                normalized_k = np.clip(normalized_k, -1, 1)
+                action = np.array([normalized_x, normalized_k])
+                return action
+            # Modify X
+            elif v_ee*a_ee<0 and abs(k)>10:
+                new_x = m*g/k
+                new_rest_length = new_x + self.robot.EE.position.y - self.robot.body.position.y
+                new_rest_length = np.clip(new_rest_length, l_min, l_max)
+                if K_CONTROL == 'direct':
+                    normalized_k = (k - ((k_max+k_min)/2))/((k_max-k_min)/2)
+                elif K_CONTROL == 'incremental':
+                    normalized_k = 0
+                if L_CONTROL == 'direct':
+                    normalized_x = (new_rest_length - ((l_max+l_min)/2))/((l_max-l_min)/2)
+                elif L_CONTROL == 'incremental':
+                    normalized_x = alpha*(new_rest_length - self.robot.actuator.rest_length)/(l_max-l_min)
+                normalized_x = np.clip(normalized_x, -1, 1)
+                normalized_k = np.clip(normalized_k, -1, 1)
+                action = np.array([normalized_x, normalized_k])
+                return action
         return None
             
+    def only_k_control(self):
+        m = self.robot.body.mass
+        g = self.env.gravity
+        x = self.robot.actuator.rest_length-(self.robot.EE.position.y-self.robot.body.position.y)
+        k = self.robot.actuator.stiffness
+        v_ee = self.robot.EE.velocity.y
+        a_ee = self.robot.EE_acceleration
+        alpha = 30
+        
+        l_max = self.robot.LENGTH_LIMITS[1]
+        l_min = self.robot.LENGTH_LIMITS[0]
+        k_max = self.robot.STIFFNESS_LIMITS[1]
+        k_min = self.robot.STIFFNESS_LIMITS[0]
+        
+        if abs(x)>10:
+            new_k = m*g/x
+            new_k = np.clip(new_k, k_min, k_max)
+            normalized_k = alpha*(new_k - k)/(k_max-k_min)
+            normalized_k = np.clip(normalized_k, -1, 1)
+            return np.array([0, normalized_k])
+        return None
             
+    def only_x_control(self):
+        m = self.robot.body.mass
+        g = self.env.gravity
+        x = self.robot.actuator.rest_length-(self.robot.EE.position.y-self.robot.body.position.y)
+        k = self.robot.actuator.stiffness
+        v_ee = self.robot.EE.velocity.y
+        a_ee = self.robot.EE_acceleration
+        alpha = 30
+        
+        l_max = self.robot.LENGTH_LIMITS[1]
+        l_min = self.robot.LENGTH_LIMITS[0]
+        k_max = self.robot.STIFFNESS_LIMITS[1]
+        k_min = self.robot.STIFFNESS_LIMITS[0]
+        
+        if abs(x)>10:
+            new_x = m*g/k
+            new_rest_length = new_x + self.robot.EE.position.y - self.robot.body.position.y
+            new_rest_length = np.clip(new_rest_length, l_min, l_max)
+            normalized_x = alpha*(new_rest_length - self.robot.actuator.rest_length)/(l_max-l_min)
+            normalized_x = np.clip(normalized_x, -1, 1)
+            return np.array([normalized_x, 0])
+        return None
+            
+    def random_control(self):
+        action = np.random.uniform(-1, 1, size=(2,))
+        return action
+    
+    def mathematical_control2(self):
+        m = self.robot.body.mass
+        g = self.env.gravity
+        x = self.robot.actuator.rest_length-(self.robot.EE.position.y-self.robot.body.position.y)
+        v = self.robot.body.velocity.y
+        k = self.robot.actuator.stiffness
+        v_ee = self.robot.EE.velocity.y
+        a_ee = self.robot.EE_acceleration
+        
+        l_max = self.robot.LENGTH_LIMITS[1]
+        l_min = self.robot.LENGTH_LIMITS[0]
+        k_max = self.robot.STIFFNESS_LIMITS[1]
+        k_min = self.robot.STIFFNESS_LIMITS[0]
+        
+                
+    
+    
 if __name__ == '__main__':
     robot = Robot()
     env = Environment()
     world = World(robot, env, mode='control')
     
-    MODE = '-'
+    MODE = 'RL'
     
     if MODE == 'RL':
-        model = DDPG.load("models/DDPG/model1")
+        # model = PPO.load("models/PPO/model54")
+        # model = A2C.load("models/A2C/model2")
+        model = SAC.load("models/SAC/model4")
         while True:
             action, _ = model.predict(world.get_observation())
             world.update(action=action)

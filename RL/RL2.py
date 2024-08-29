@@ -20,11 +20,3 @@ finally:
     file = open("model_no.txt", 'w')
     model_no += 1
     file.write(str(model_no))
-
-
-
-"""
-Notes:
-
-
-""" 

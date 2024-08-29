@@ -1,0 +1,18 @@
+DDPG Models:
+
+Model0 and Model1 were failures, they took too long to train because the replay buffer was too long. 
+Also, the reward function discouraged having a near-0 actuator rest length which led to most of the progress. No real progress was made.
+
+Model2 params:
+    policy="MlpPolicy",
+    env=world,
+    learning_rate=1e-3,
+    buffer_size=10000,
+    learning_starts=50000,
+    batch_size=64,
+    tau=0.005,
+    gamma=0.9,
+    action_noise=action_noise,
+    policy_kwargs=dict(activation_fn=th.nn.ReLU),
+    verbose=1,
+    tensorboard_log="logs/"

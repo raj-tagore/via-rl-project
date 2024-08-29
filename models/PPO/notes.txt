@@ -48,5 +48,58 @@ Logs for model29 were in PPO15, Env randomization was on here.
 Model30 fixed all above that was wrong in model29. Model30 was trained for 5M steps. Model30 
 could have literaly byhearted the env but it failed to do even that.
 
-Model31 is trained by a MlpLstmPolicy, which I hope will understand the relationships between
-multiple states better.
+Changed the reward function to just reward=1 if vel<10. Much simpler, and training it with no 
+randomization in Model31. (direct control used)
+model32 is same as above.
+
+model33, model34 - simple 1 if vel<10 reward function. Incremental control with multiplier=30. Random=True
+model35 - has epsize=2048, nsteps=256, batch=64, otherwise same as model34
+
+--------------------
+New idea - First we teach the model to not fucking break itself
+Then we gradually teach it to reduce velocity.
+model36 - rewarded for staying alive. bigger nn. control direct. I trained for 5M+ steps, absolutely no progress.
+
+--------------------
+Fixed the env glitches, random policy no longer breaks everything. At least robot stays in env.
+However, now we can only use incremental control.
+model37 worked. Quite well, might I add.
+Turns out, the problem was that the required actions for stability ranged from 0.005 to -0.005, and sampling 
+an action space from -1 to 1 led to updates that were too extreme. Random initialization took too long to
+reach this range, and since the robot kept going out of bounds, it really learnt very slowly.
+Renormalization fixed the issue.
+the progress is logged in PPO-24
+further training is done for 10M steps in PPO-26
+I think further training broke model37. :(
+
+
+model38 - reduction to the observation function. logs are in PPO_27
+------------------------
+The loss function has been bad. Like it gave a 50% reward to even random policy.
+New loss function (function 1) and training with 9 observations in an extended NN.
+PPO-28, model39. initially appears to converge in opp direction. (gets worse)
+Eventually manages to get there. But reward is very low.
+
+model40/ppo_29 will be trained on larger n_steps=8192 and batch size=256.
+
+when randomization is on, env is not markov anymore.
+Lets turn randomization of mass off and see.
+model41/ppo_30 - Still didnt converge, at least not for 300k steps.
+
+Lets try turning randomization off completely.
+model42/ppo_31 - does not converge at all :(
+
+random off, new reward function
+model44/ppo_33 - Does not converge at all.
+
+model48 converged, interesting strategy. It elongated to full length and chose to change 
+stiffness to stabilize.
+
+Awkwardly, after model reaches a peak, more training leads to it getting worse and staying worse.
+Avoid training more than required.
+
+Finally works - model50/ppo_39 
+for robot6 - model52/ppo_41
+
+FINAL - model54/ppo_43
+--------------------------
